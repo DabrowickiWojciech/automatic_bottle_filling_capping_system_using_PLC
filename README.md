@@ -25,7 +25,7 @@ The project was made using B&R components listed below.
 |X20 PS4951            |Potentiometers Input  |
 |X20 MM4456            |PWM generator         |
 |X20 BT9100            |Modbus communication  |
-|80PS080X3.10-01       |Charger               |
+|80PS080X3.10-01       |PSU                   |
 |ACOPOSmicro 100D Servo|Servo controller      |
 
 ### Src
