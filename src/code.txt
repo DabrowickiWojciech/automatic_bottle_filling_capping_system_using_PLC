@@ -1,0 +1,264 @@
+PROGRAM _INIT
+	//initialization of program variables
+	Red_button := 1;
+	Green_button := 0;
+	Bottle_sensor := 0;
+	Red_lamp := 1;
+	Green_lamp := 0;
+	Valve := 0;
+	Pomp := 0;
+	CyclicStep := 0;
+	Wait := 0;
+	
+	//PWM inicialization
+	PeriodPWM_ms := 20;
+	//The 20 ms length scaling is on 0 -> 32761 that's why we add 2/20 to make the engine initially have filling 2 ms
+	WidthPWM := 2/20*32761;	
+	
+	//initialization of engine blocks
+	MpAxisBasic_1(MpLink := ADR(gAxis_1), //setting the address of the file to be changed
+				  Enable := TRUE, //turning on the engines
+	Parameters := ADR(BasicParameters_1)); //addressing file with engine parameters
+	MpAxisBasic_2(MpLink := ADR(gAxis_2),Enable := TRUE,Parameters := ADR(BasicParameters_2));
+	
+	//initialization of engine block parameters
+	BasicParameters_1.Velocity := 10;
+	BasicParameters_1.Acceleration := 50;
+	BasicParameters_1.Deceleration := 50;
+	BasicParameters_1.Direction := 0;
+	BasicParameters_1.Distance := 250;
+	
+	BasicParameters_2.Velocity := 30;
+	BasicParameters_2.Acceleration := 50;
+	BasicParameters_2.Deceleration := 50;
+	BasicParameters_2.Direction := 0;
+	BasicParameters_2.Distance := 1500;
+	 
+END_PROGRAM
+
+PROGRAM _CYCLIC
+	
+	//switching logic if the button is red
+	IF Red_button = 1 THEN
+		Red_lamp := 1;
+		Green_lamp := 0;
+	END_IF
+	
+	//logic switching if green button
+	IF Green_button = 1 THEN
+		Green_lamp := 1;
+		Red_lamp := 0;
+	END_IF
+	
+	//if the green button is on, then we execute the program
+	IF Green_lamp = TRUE THEN
+		//state machine
+		//states 0,1,2 are required to turn on the engines and configure them
+		CASE CyclicStep OF
+			0:
+				//turning on automatic engine tuning
+				MpAxisBasic_1.AutoTune := TRUE;
+				//setting parameters needed for tuning
+				BasicParameters_1.AutoTune.MaxPositionError := 1;
+				BasicParameters_1.AutoTune.MaxCurrentPercent := 20;
+				
+				MpAxisBasic_2.AutoTune := TRUE;
+				BasicParameters_2.AutoTune.MaxPositionError := 1;
+				BasicParameters_2.AutoTune.MaxCurrentPercent := 20;
+			
+				//if both engines are tuned, we go to state 1
+				IF MpAxisBasic_1.Info.AutoTuneDone AND 
+					MpAxisBasic_2.Info.AutoTuneDone THEN
+					CyclicStep := 1;
+				END_IF
+			1:
+				//switching on the power supply to the motors
+				MpAxisBasic_1.Power := TRUE;
+				MpAxisBasic_2.Power := TRUE;
+				
+				//if both engines are on, we go to state 2
+				IF MpAxisBasic_1.PowerOn AND MpAxisBasic_2.PowerOn THEN
+					CyclicStep := 2;
+				END_IF
+				
+			2:
+				//setting home for both motors, this is required to move them
+				MpAxisBasic_1.Home := TRUE;
+				MpAxisBasic_2.Home := TRUE;
+				
+				//if home are set then we go to state 3
+				IF MpAxisBasic_1.IsHomed AND MpAxisBasic_2.IsHomed THEN
+					CyclicStep := 3;
+				END_IF
+				
+			3:
+				(*Initial state, bottle retrieval, if the Bottle Sensor detects a bottle then it moves to the next state
+					- motor turning the main rotating mechanism ON
+					- capping motor OFF
+					- valve OFF
+					- Pomp OFF*)
+				//turning on the rotation of the turret engine
+				IF MpAxisBasic_1.MoveVelocity = FALSE THEN
+					MpAxisBasic_1.MoveVelocity := TRUE;
+				END_IF
+				 
+				//if a bottle is detected, we go to state 4
+				IF Bottle_sensor THEN
+					CyclicStep := 4;
+				END_IF
+				
+			4:
+				(*The condition of the bottle is under pouring, the bottle is missing under the cap
+					- motor turning the main rotating mechanism OFF
+					- capping motor OFF
+					- valve ON
+					- Pomp ON*)
+				//turning off the revolver mechanism
+				IF MpAxisBasic_1.MoveVelocity = TRUE THEN
+					MpAxisBasic_1.MoveVelocity := FALSE;
+				END_IF
+				
+				//turning on the pump and Valve, each cycle takes 100ms, after 50 cycles, i.e. 5s (filling the bottle), we reset the time and go to cycle 5
+				Valve := 1;
+				Pomp := 1;
+				Wait := Wait + 1;
+				IF Wait > 50 THEN
+					Wait := 0;
+					CyclicStep := 5;
+				END_IF
+				
+			5:
+				(*90 degree forward rotation state
+					- motor turning the main rotating mechanism ON
+					- capping motor OFF
+					- valve OFF
+					- Pomp OFF*)
+				//turning off Valve and the pump from cycle 4
+				Valve := 0;
+				Pomp := 0;
+				
+				//enabling Additive rotation, i.e. adding an additional 250 units representing a 90-degree rotation to the current rotation state
+				IF MpAxisBasic_1.MoveAdditive = FALSE THEN
+				MpAxisBasic_1.MoveAdditive := TRUE;
+				END_IF
+				
+				//if Bottle_sensor after a 90 degree rotation then
+				IF MpAxisBasic_1.InPosition THEN
+					//if the Bottle_sensor detects another bottle, we go to cycle 6, if it does not detect it, we go to cycle 7
+					IF Bottle_sensor THEN
+						CyclicStep := 6;
+					ELSE
+						CyclicStep := 7;
+					END_IF
+					
+				END_IF
+				
+			6:
+				(*Condition, two bottles in slots, under the pourer and under the cap
+					- motor turning the main rotating mechanism OFF
+					- capping motor ON
+					- valve ON
+					- Pomp ON*)
+				//disabling additive movement
+				IF MpAxisBasic_1.MoveAdditive = TRUE THEN
+					MpAxisBasic_1.MoveAdditive := FALSE;
+				END_IF
+				
+				//lowering the capping servo
+				IF WidthPWM = (2/20*32761) THEN
+					WidthPWM := 1/20 * 32761;
+				END_IF
+				
+				//turning on capping motor
+				IF MpAxisBasic_2.MoveAdditive = FALSE THEN
+					MpAxisBasic_2.MoveAdditive := TRUE;
+				END_IF
+				
+				//turning the pump on and Valveu turning it off after 5 seconds
+				Valve := 1;
+				Pomp := 1;
+				Wait := Wait + 1;
+				IF Wait > 50 THEN
+					Valve := 0;
+					Pomp := 0;
+				END_IF
+				
+				//if the spinning ends then
+				IF MpAxisBasic_2.InPosition THEN
+					//we turn off additive movement
+					MpAxisBasic_2.MoveAdditive := FALSE;
+					//we raise the arm of the modeling servo
+					WidthPWM := 2/20 * 32761;
+				END_IF
+				
+				//if all activities are finished, we reset the time counter and go to cycle 5
+				IF MpAxisBasic_2.InPosition AND Wait > 50 THEN
+					Wait := 0;
+					CyclicStep := 5;
+				END_IF
+				
+			7:
+				(*90 degree forward rotation state
+					- motor turning the main rotating mechanism OFF
+					- capping motor ON
+					- valve OFF
+					- Pomp OFF*)
+				
+				//we turn off the movement of the motor rotating the revolver mechanism
+				IF MpAxisBasic_1.MoveVelocity = TRUE THEN
+					MpAxisBasic_1.MoveVelocity := FALSE;
+				END_IF
+				
+				//we lower the arm of the modeling servo
+				IF 	WidthPWM = (2/20 * 32761) THEN
+					WidthPWM := 1/20 * 32761;
+				END_IF
+				
+				//turn on the turning motor
+				IF MpAxisBasic_2.MoveAdditive = FALSE THEN
+					MpAxisBasic_2.MoveAdditive := TRUE;
+				END_IF
+				
+				//after completing the capping
+				IF MpAxisBasic_2.MoveDone THEN
+					//transition to cycle 4
+					CyclicStep := 4;
+					//turn off the engine and raise the modeling servo arm
+					MpAxisBasic_2.MoveAdditive := FALSE;
+					WidthPWM := 2/20 * 32761;
+				END_IF
+				
+		END_CASE
+	
+	ELSE
+		(*when the red button is pressed, everything turns off*)
+		Pomp := 0;
+		Valve := 0;
+		
+		IF MpAxisBasic_1.MoveVelocity = TRUE THEN
+			MpAxisBasic_1.MoveVelocity := FALSE;
+		END_IF
+
+		IF MpAxisBasic_1.MoveAdditive = TRUE THEN
+			MpAxisBasic_1.MoveAdditive := FALSE;
+		END_IF
+		
+		IF 	WidthPWM = (1/20 * 32761) THEN
+			WidthPWM := 2/20 * 32761;
+		END_IF
+		
+		IF MpAxisBasic_2.MoveAdditive = TRUE THEN
+			MpAxisBasic_2.MoveAdditive := FALSE;
+		END_IF
+	END_IF
+	
+	(*switching on the engines*)
+	MpAxisBasic_1();
+	MpAxisBasic_2();
+	
+END_PROGRAM
+
+PROGRAM _EXIT
+	
+	 
+END_PROGRAM 
