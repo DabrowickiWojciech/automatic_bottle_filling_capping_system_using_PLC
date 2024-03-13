@@ -5,7 +5,7 @@
 </p>
 
 ## Table of contents
-- [Controller and addons](#controler-and-addons)
+- [Controller and addons](#controller-and-addons)
 - [src](#src)
 - [Model](#model)
 
